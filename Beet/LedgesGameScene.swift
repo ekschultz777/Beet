@@ -57,18 +57,57 @@ final class LedgesGameScene: SKScene {
     private let maxFloorStep: CGFloat = 54
     /// Shifts width / floor phases so two lanes can share rules but different mazes.
     private let mazePhase: CGFloat
+    /// Tempo for rhythm-aligned column widths (scroll distance per beat at `scrollSpeed`). Fixed for the run.
+    private let bpm: CGFloat
 
     private func ballX() -> CGFloat { layoutSize.width * 0.5 }
+
+    /// World-space points the maze scrolls in one musical beat at the current BPM.
+    private func scrollPointsPerBeat() -> CGFloat {
+        let clampedBpm = max(40, min(240, bpm))
+        return scrollSpeed * 60 / clampedBpm
+    }
+
+    /// Width quantization grid: whole beats, halved as needed until a column can fit `maxColumnWidth`.
+    private func columnWidthGridUnit() -> CGFloat {
+        let beat = scrollPointsPerBeat()
+        var g = beat
+        while g > maxColumnWidth {
+            g /= 2
+        }
+        return max(1, g)
+    }
+
+    /// Snaps procedural width to a multiple of the beat grid so columns line up with tempo.
+    private func quantizeColumnWidth(_ raw: CGFloat) -> CGFloat {
+        let q = columnWidthGridUnit()
+        let rawClamped = min(maxColumnWidth, max(minColumnWidth, raw))
+        var k = (rawClamped / q).rounded(.toNearestOrAwayFromZero)
+        k = max(1, k)
+        var w = k * q
+        if w < minColumnWidth {
+            k = ceil(minColumnWidth / q)
+            w = max(minColumnWidth, k * q)
+        }
+        if w > maxColumnWidth {
+            k = floor(maxColumnWidth / q)
+            k = max(1, k)
+            w = k * q
+        }
+        return min(maxColumnWidth, max(minColumnWidth, w))
+    }
 
     private func columnWidth(forIndex i: Int) -> CGFloat {
         let gi = CGFloat(i)
         let u = 0.5
             + 0.5 * sin(gi * 1.73 + sin(gi * 0.37 + mazePhase * 0.41) * 2.1 + mazePhase * 0.51)
-        return minColumnWidth + (maxColumnWidth - minColumnWidth) * min(1, max(0, u))
+        let raw = minColumnWidth + (maxColumnWidth - minColumnWidth) * min(1, max(0, u))
+        return quantizeColumnWidth(raw)
     }
 
-    init(size: CGSize, mazePhase: CGFloat = 0) {
+    init(size: CGSize, mazePhase: CGFloat = 0, bpm: CGFloat = 120) {
         self.mazePhase = mazePhase
+        self.bpm = max(40, min(240, bpm))
         super.init(size: size)
         anchorPoint = .zero
         scaleMode = .resizeFill
@@ -90,6 +129,7 @@ final class LedgesGameScene: SKScene {
 
     required init?(coder aDecoder: NSCoder) {
         self.mazePhase = 0
+        self.bpm = 120
         fatalError("init(coder:) has not been implemented")
     }
 

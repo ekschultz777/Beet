@@ -16,8 +16,9 @@ final class BeetGameController: ObservableObject, LedgesGameSceneDelegate {
     @Published private(set) var runSeconds: CGFloat = 0
     @Published private(set) var isGameOver = false
 
-    init(mazePhase: CGFloat = 0) {
-        scene = LedgesGameScene(size: .zero, mazePhase: mazePhase)
+    init(mazePhase: CGFloat = 0, initialBpm: Double = 120) {
+        let clamped = min(240, max(40, initialBpm))
+        scene = LedgesGameScene(size: .zero, mazePhase: mazePhase, bpm: CGFloat(clamped))
         scene.gameDelegate = self
     }
 
@@ -53,6 +54,38 @@ final class BeetGameController: ObservableObject, LedgesGameSceneDelegate {
 private func timeString(_ t: CGFloat) -> String {
     let s = max(0, Int(t))
     return String(format: "%d:%02d", s / 60, s % 60)
+}
+
+/// Fires `onJump` on touch down (first contact), not on release like `onTapGesture`.
+private struct JumpOnTouchDownPad: View {
+    var jumpEnabled: Bool
+    var onJump: () -> Void
+    @State private var didJumpThisTouch = false
+
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard jumpEnabled else { return }
+                        if !didJumpThisTouch {
+                            didJumpThisTouch = true
+                            onJump()
+                        }
+                    }
+                    .onEnded { _ in
+                        didJumpThisTouch = false
+                    }
+            )
+            .allowsHitTesting(jumpEnabled)
+            .onChange(of: jumpEnabled) { _, enabled in
+                if !enabled {
+                    didJumpThisTouch = false
+                }
+            }
+    }
 }
 
 // MARK: - Single lane (SpriteKit + HUD)
@@ -105,18 +138,16 @@ struct BeetLaneView: View {
                             .foregroundStyle(.white.opacity(0.5))
                     }
                     Spacer()
-                    Text(showTopLaneHUD ? "Tap anywhere to jump up to the next ledge" : "Tap this side to jump")
+                    Text(showTopLaneHUD ? "Press anywhere to jump" : "Press this side to jump")
                         .font(.system(.footnote, design: .rounded))
                         .foregroundStyle(.white.opacity(0.55))
                         .padding(.bottom, 28)
                 }
                 .allowsHitTesting(false)
 
-                Color.clear
-                    .contentShape(Rectangle())
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onTapGesture { game.jump() }
-                    .allowsHitTesting(jumpEnabled)
+                JumpOnTouchDownPad(jumpEnabled: jumpEnabled) {
+                    game.jump()
+                }
 
                 if showLocalGameOver, game.isGameOver {
                     Color.black.opacity(0.55)
@@ -156,10 +187,10 @@ struct BeetGameView: View {
     private let onMainMenu: (() -> Void)?
     @StateObject private var game: BeetGameController
 
-    init(mazePhase: CGFloat = 0, laneCaption: String = "Ledges", onMainMenu: (() -> Void)? = nil) {
+    init(mazePhase: CGFloat = 0, laneCaption: String = "Ledges", initialBpm: Double = 120, onMainMenu: (() -> Void)? = nil) {
         self.laneCaption = laneCaption
         self.onMainMenu = onMainMenu
-        _game = StateObject(wrappedValue: BeetGameController(mazePhase: mazePhase))
+        _game = StateObject(wrappedValue: BeetGameController(mazePhase: mazePhase, initialBpm: initialBpm))
     }
 
     var body: some View {
@@ -179,8 +210,15 @@ struct BeetGameView: View {
 struct DualBeetGameView: View {
     var onMainMenu: (() -> Void)? = nil
 
-    @StateObject private var leftGame = BeetGameController(mazePhase: 0)
-    @StateObject private var rightGame = BeetGameController(mazePhase: .pi * 1.37 + 0.6)
+    @StateObject private var leftGame: BeetGameController
+    @StateObject private var rightGame: BeetGameController
+
+    init(initialBpm: Double = 120, onMainMenu: (() -> Void)? = nil) {
+        self.onMainMenu = onMainMenu
+        let b = min(240, max(40, initialBpm))
+        _leftGame = StateObject(wrappedValue: BeetGameController(mazePhase: 0, initialBpm: b))
+        _rightGame = StateObject(wrappedValue: BeetGameController(mazePhase: .pi * 1.37 + 0.6, initialBpm: b))
+    }
 
     private var sessionOver: Bool { leftGame.isGameOver || rightGame.isGameOver }
     private var totalSteps: Int { leftGame.tilesPassed + rightGame.tilesPassed }
@@ -211,27 +249,28 @@ struct DualBeetGameView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            VStack {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Both mazes")
-                            .font(.system(.caption, design: .rounded, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.8))
-                        Text("Total steps \(totalSteps)")
-                            .font(.system(.title3, design: .rounded, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.95))
+            .overlay(alignment: .top) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Both mazes")
+                                .font(.system(.caption, design: .rounded, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.8))
+                            Text("Total steps \(totalSteps)")
+                                .font(.system(.title3, design: .rounded, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.95))
+                        }
+                        Spacer()
+                        Text(timeString(sessionTime))
+                            .font(.system(.title3, design: .rounded).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.92))
                     }
-                    Spacer()
-                    Text(timeString(sessionTime))
-                        .font(.system(.title3, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.92))
+                    .padding(.horizontal, 20)
+                    .allowsHitTesting(false)
                 }
-                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 10)
-                Spacer()
             }
-            .allowsHitTesting(false)
 
             if sessionOver {
                 Color.black.opacity(0.55)

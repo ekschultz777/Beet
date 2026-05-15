@@ -15,28 +15,100 @@ private enum PlayRoute: Hashable {
 
 struct ContentView: View {
     @State private var route: PlayRoute = .modeSelect
+    @State private var selectedBpm: Double = 120
 
     var body: some View {
         Group {
             switch route {
             case .modeSelect:
                 PlayModeSelectView(
+                    bpm: $selectedBpm,
                     onSingle: { route = .singleMaze },
                     onSplit: { route = .splitScreen }
                 )
             case .singleMaze:
-                BeetGameView(onMainMenu: { route = .modeSelect })
+                BeetGameView(initialBpm: selectedBpm, onMainMenu: { route = .modeSelect })
             case .splitScreen:
-                DualBeetGameView(onMainMenu: { route = .modeSelect })
+                DualBeetGameView(initialBpm: selectedBpm, onMainMenu: { route = .modeSelect })
             }
         }
         .animation(.easeInOut(duration: 0.22), value: route)
     }
 }
 
+// MARK: - Rhythm helpers (match `LedgesGameScene` scroll speed & width caps)
+
+private enum MenuRhythmLayout {
+    static let scrollSpeed: CGFloat = 120
+    static let maxColumnWidth: CGFloat = 132
+
+    static func scrollPointsPerBeat(bpm: Double) -> CGFloat {
+        let b = max(40, min(240, bpm))
+        return scrollSpeed * 60 / CGFloat(b)
+    }
+
+    static func columnWidthGridUnit(bpm: Double) -> CGFloat {
+        var g = scrollPointsPerBeat(bpm: bpm)
+        while g > maxColumnWidth {
+            g /= 2
+        }
+        return max(1, g)
+    }
+
+    static func helperLine(bpm: Double) -> String {
+        let beat = scrollPointsPerBeat(bpm: bpm)
+        let grid = columnWidthGridUnit(bpm: bpm)
+        let bStr = beat >= 100 ? String(format: "%.0f", beat) : String(format: "%.1f", beat)
+        let gStr = grid >= 100 ? String(format: "%.0f", grid) : String(format: "%.1f", grid)
+        return "Scroll per beat ≈ \(bStr) pt · column widths = multiples of \(gStr) pt"
+    }
+}
+
+private struct MenuBPMCard: View {
+    @Binding var bpm: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("BPM")
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+            HStack(spacing: 10) {
+                Button {
+                    bpm = max(40, bpm - 1)
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .imageScale(.medium)
+                }
+                .buttonStyle(.plain)
+                Text("\(Int(bpm))")
+                    .font(.system(.title3, design: .rounded).monospacedDigit().weight(.semibold))
+                    .frame(minWidth: 48)
+                Button {
+                    bpm = min(240, bpm + 1)
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .imageScale(.medium)
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
+            Slider(value: $bpm, in: 40...240, step: 1)
+            Text(MenuRhythmLayout.helperLine(bpm: bpm))
+                .font(.system(.caption2, design: .rounded))
+                .foregroundStyle(.white.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.white)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
 // MARK: - Mode picker
 
 private struct PlayModeSelectView: View {
+    @Binding var bpm: Double
     let onSingle: () -> Void
     let onSplit: () -> Void
 
@@ -54,7 +126,10 @@ private struct PlayModeSelectView: View {
                         .font(.system(.title3, design: .rounded, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
                 }
-                .padding(.bottom, 8)
+                .padding(.bottom, 4)
+
+                MenuBPMCard(bpm: $bpm)
+                    .padding(.horizontal, 24)
 
                 Text("How do you want to play?")
                     .font(.system(.subheadline, design: .rounded, weight: .medium))
