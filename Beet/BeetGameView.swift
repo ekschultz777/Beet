@@ -7,6 +7,11 @@
 
 import SpriteKit
 import SwiftUI
+import UIKit
+
+private enum BeetGameSettings {
+    static let jumpHapticsEnabledKey = "Beet.jumpHapticsEnabled"
+}
 
 @MainActor
 final class BeetGameController: ObservableObject, LedgesGameSceneDelegate {
@@ -16,10 +21,17 @@ final class BeetGameController: ObservableObject, LedgesGameSceneDelegate {
     @Published private(set) var runSeconds: CGFloat = 0
     @Published private(set) var isGameOver = false
 
+    private let jumpHaptic = UIImpactFeedbackGenerator(style: .light)
+
     init(mazePhase: CGFloat = 0, initialBpm: Double = 120) {
         let clamped = min(240, max(40, initialBpm))
         scene = LedgesGameScene(size: .zero, mazePhase: mazePhase, bpm: CGFloat(clamped))
         scene.gameDelegate = self
+        jumpHaptic.prepare()
+    }
+
+    private static var isJumpHapticsEnabled: Bool {
+        UserDefaults.standard.object(forKey: BeetGameSettings.jumpHapticsEnabledKey) as? Bool ?? true
     }
 
     func ledgesScene(_ scene: LedgesGameScene, didUpdate tilesPassed: Int, seconds: CGFloat) {
@@ -37,6 +49,9 @@ final class BeetGameController: ObservableObject, LedgesGameSceneDelegate {
 
     func jump() {
         scene.jump()
+        guard Self.isJumpHapticsEnabled else { return }
+        jumpHaptic.impactOccurred()
+        jumpHaptic.prepare()
     }
 
     func restart() {
@@ -54,6 +69,32 @@ final class BeetGameController: ObservableObject, LedgesGameSceneDelegate {
 private func timeString(_ t: CGFloat) -> String {
     let s = max(0, Int(t))
     return String(format: "%d:%02d", s / 60, s % 60)
+}
+
+private struct InGameSettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(BeetGameSettings.jumpHapticsEnabledKey) private var jumpHapticsEnabled = true
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Toggle("Haptics on jump", isOn: $jumpHapticsEnabled)
+                } footer: {
+                    Text("A short vibration when your touch triggers a jump. Turn off if you prefer silent play.")
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Fires `onJump` on touch down (first contact), not on release like `onTapGesture`.
@@ -100,6 +141,10 @@ struct BeetLaneView: View {
     var showTopLaneHUD: Bool
     /// Shown on the game-over card (e.g. return to mode picker).
     var onMainMenu: (() -> Void)? = nil
+    /// Gear button opens settings (single-player HUD only).
+    var showSettingsGear: Bool = false
+
+    @State private var showSettingsSheet = false
 
     var body: some View {
         GeometryReader { geo in
@@ -174,8 +219,27 @@ struct BeetLaneView: View {
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                if showSettingsGear, showTopLaneHUD, !game.isGameOver {
+                    Button {
+                        showSettingsSheet = true
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.9))
+                            .padding(10)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 8)
+                    .padding(.top, 6)
+                    .accessibilityLabel("Game settings")
+                }
+            }
             .onAppear { game.layoutScene(size: size) }
             .onChange(of: geo.size) { _, new in game.layoutScene(size: new) }
+            .sheet(isPresented: $showSettingsSheet) {
+                InGameSettingsSheet()
+            }
         }
     }
 }
@@ -200,7 +264,8 @@ struct BeetGameView: View {
             jumpEnabled: !game.isGameOver,
             showLocalGameOver: true,
             showTopLaneHUD: true,
-            onMainMenu: onMainMenu
+            onMainMenu: onMainMenu,
+            showSettingsGear: true
         )
     }
 }
@@ -212,6 +277,7 @@ struct DualBeetGameView: View {
 
     @StateObject private var leftGame: BeetGameController
     @StateObject private var rightGame: BeetGameController
+    @State private var showSettingsSheet = false
 
     init(initialBpm: Double = 120, onMainMenu: (() -> Void)? = nil) {
         self.onMainMenu = onMainMenu
@@ -249,27 +315,39 @@ struct DualBeetGameView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .overlay(alignment: .top) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Both mazes")
-                                .font(.system(.caption, design: .rounded, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.8))
-                            Text("Total steps \(totalSteps)")
-                                .font(.system(.title3, design: .rounded, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.95))
-                        }
-                        Spacer()
+            .overlay(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Both mazes")
+                        .font(.system(.caption, design: .rounded, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                    Text("Total steps \(totalSteps)")
+                        .font(.system(.title3, design: .rounded, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.95))
+                }
+                .padding(.leading, 20)
+                .padding(.top, 10)
+                .allowsHitTesting(false)
+            }
+            .overlay(alignment: .topTrailing) {
+                if !sessionOver {
+                    HStack(spacing: 12) {
                         Text(timeString(sessionTime))
                             .font(.system(.title3, design: .rounded).monospacedDigit())
                             .foregroundStyle(.white.opacity(0.92))
+                            .allowsHitTesting(false)
+                        Button {
+                            showSettingsSheet = true
+                        } label: {
+                            Image(systemName: "gearshape.fill")
+                                .font(.title3)
+                                .foregroundStyle(.white.opacity(0.9))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Game settings")
                     }
-                    .padding(.horizontal, 20)
-                    .allowsHitTesting(false)
+                    .padding(.trailing, 20)
+                    .padding(.top, 10)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 10)
             }
 
             if sessionOver {
@@ -300,6 +378,9 @@ struct DualBeetGameView: View {
                 .padding(28)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             }
+        }
+        .sheet(isPresented: $showSettingsSheet) {
+            InGameSettingsSheet()
         }
         .onChange(of: sessionOver) { _, over in
             if over {
